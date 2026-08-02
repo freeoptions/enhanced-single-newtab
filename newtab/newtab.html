@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>新标签页</title>
+  <link rel="stylesheet" href="newtab.css">
+</head>
+<body>
+  <div id="setup" class="screen" hidden>
+    <div class="card">
+      <h1>设置壁纸文件夹</h1>
+      <p class="desc">选择你的壁纸文件夹</p>
+      <button id="restoreBtn" hidden>恢复原目录授权</button>
+      <button id="pickBtn">选择文件夹</button>
+      <div id="importStatus" class="import-status" aria-live="polite" hidden>
+        <div class="progress-track" aria-hidden="true">
+          <div class="progress-bar"></div>
+        </div>
+        <p id="importStatusText">正在扫描壁纸文件夹…</p>
+      </div>
+      <p class="hint">选择一次壁纸文件夹后，后续会直接按目录读取壁纸</p>
+    </div>
+    <input type="file" id="folderInput" webkitdirectory multiple hidden>
+  </div>
+
+  <div id="main" class="screen">
+    <div class="wallpaper-stack" aria-hidden="true">
+      <div id="wallpaperA" class="wallpaper"></div>
+      <div id="wallpaperB" class="wallpaper"></div>
+    </div>
+    <div class="actions">
+      <button id="settingsBtn" title="重新选择文件夹">⚙️</button>
+      <button id="exportBtn" title="导出已标记壁纸路径">📋</button>
+      <button id="dislikeBtn" title="不喜欢当前壁纸">👎</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+  <div id="syncHint" class="sync-hint" aria-live="polite" hidden></div>
+
+  <script src="newtab.js"></script>
+</body>
+</html>
