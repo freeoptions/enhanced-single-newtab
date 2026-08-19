@@ -8,7 +8,7 @@ const WALLPAPER_STORE_NAME = 'handles';
 const WALLPAPER_HANDLE_KEY = 'wallpaperDirectoryHandle';
 const WALLPAPER_FAILURE_SCAN_THRESHOLD = 10;
 const MAX_WALLPAPER_LOAD_ATTEMPTS = WALLPAPER_FAILURE_SCAN_THRESHOLD;
-const WALLPAPER_FAILURE_COUNT_KEY = 'wallpaperReadFailureCount';
+const WALLPAPER_FAILURE_COUNT_KEY = 'wallpaperDirectoryChangeCount';
 
 let currentPath = null;
 let currentWallpaperUrl = null;
@@ -220,9 +220,12 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
       currentPath = path;
       applyWallpaper(fileUrl);
 
-      if (failedItems.length && !skipFailureScan) {
-        const shouldRescan = await handleWallpaperReadFailures(failedItems.length);
+      const directoryChangeCount = countDirectoryChangeFailures(failedItems);
+      if (failedItems.length) {
         await removeUnavailableWallpaperPaths(failedItems);
+      }
+      if (directoryChangeCount && !skipFailureScan) {
+        const shouldRescan = await handleWallpaperReadFailures(directoryChangeCount);
         if (shouldRescan) {
           await refreshWallpaperDirectory();
         }
@@ -247,9 +250,12 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
     }
   }
 
-  if (failedItems.length && !skipFailureScan) {
-    const shouldRescan = await handleWallpaperReadFailures(failedItems.length);
+  const directoryChangeCount = countDirectoryChangeFailures(failedItems);
+  if (failedItems.length) {
     await removeUnavailableWallpaperPaths(failedItems);
+  }
+  if (directoryChangeCount && !skipFailureScan) {
+    const shouldRescan = await handleWallpaperReadFailures(directoryChangeCount);
 
     if (shouldRescan) {
       const refreshedFiles = await refreshWallpaperDirectory();
@@ -265,6 +271,14 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
   throw error;
 }
 
+function countDirectoryChangeFailures(failedItems) {
+  return failedItems.filter(({ error }) => isDirectoryChangeError(error)).length;
+}
+
+function isDirectoryChangeError(error) {
+  return ['NotFoundError', 'TypeMismatchError', 'InvalidStateError'].includes(error?.name);
+}
+
 async function handleWallpaperReadFailures(failureCount) {
   const result = await chrome.storage.local.get(WALLPAPER_FAILURE_COUNT_KEY);
   const previousCount = Number(result[WALLPAPER_FAILURE_COUNT_KEY]) || 0;
@@ -276,11 +290,11 @@ async function handleWallpaperReadFailures(failureCount) {
   });
 
   if (shouldRescan) {
-    showSyncHint('检测到目录变化，正在更新壁纸目录…', true);
+    showSyncHint('检测到目录变化，正在更新壁纸目录…', true, 2600);
     return true;
   }
 
-  showSyncHint(`目录变化检测 ${nextCount}/${WALLPAPER_FAILURE_SCAN_THRESHOLD}`);
+  showSyncHint(`检测到目录变化 ${nextCount}/${WALLPAPER_FAILURE_SCAN_THRESHOLD}`, false, 2600);
   return false;
 }
 
@@ -306,7 +320,7 @@ async function refreshWallpaperDirectory() {
       throw error;
     }
     console.warn('Refresh wallpaper directory failed:', error);
-    showSyncHint('壁纸目录更新失败，将在下次累计达到 10 次时重试', false, 3600);
+    showSyncHint('壁纸目录更新失败，将在下次累计达到 10 次时重试', false, 2600);
     return [];
   }
 }
@@ -595,12 +609,7 @@ function updateSetupActions() {
 
 chrome.storage.local.get(['files', WALLPAPER_FAILURE_COUNT_KEY], result => {
   const { files } = result;
-  const failureCount = Number(result[WALLPAPER_FAILURE_COUNT_KEY]) || 0;
   updateSetupActions();
-
-  if (failureCount > 0) {
-    showSyncHint(`目录变化检测 ${failureCount}/${WALLPAPER_FAILURE_SCAN_THRESHOLD}`);
-  }
 
   if (files?.length) {
     showMain();
