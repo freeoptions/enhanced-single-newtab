@@ -9,6 +9,9 @@ const WALLPAPER_HANDLE_KEY = 'wallpaperDirectoryHandle';
 const WALLPAPER_FAILURE_SCAN_THRESHOLD = 10;
 const MAX_WALLPAPER_LOAD_ATTEMPTS = WALLPAPER_FAILURE_SCAN_THRESHOLD;
 const WALLPAPER_FAILURE_COUNT_KEY = 'wallpaperDirectoryChangeCount';
+const WALLPAPER_UNPLAYED_QUEUE_KEY = 'wallpaperUnplayedQueue';
+const WALLPAPER_PLAYED_PATHS_KEY = 'wallpaperPlayedPaths';
+const WALLPAPER_REVISIT_PROBABILITY = 0.1;
 
 let currentPath = null;
 let currentWallpaperUrl = null;
@@ -79,7 +82,9 @@ async function pickDirectoryWithHandle() {
     await chrome.storage.local.set({
       files: fileEntries,
       dislikedPaths: [],
-      [WALLPAPER_FAILURE_COUNT_KEY]: 0
+      [WALLPAPER_FAILURE_COUNT_KEY]: 0,
+      [WALLPAPER_UNPLAYED_QUEUE_KEY]: shuffle(fileEntries),
+      [WALLPAPER_PLAYED_PATHS_KEY]: []
     });
 
     setImporting(false);
@@ -208,10 +213,19 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
     return;
   }
 
-  const candidates = shuffle(files).slice(0, MAX_WALLPAPER_LOAD_ATTEMPTS);
-  const failedItems = [];
+  await prepareWallpaperCycle(files);
 
-  for (const path of candidates) {
+  const failedItems = [];
+  const attemptedPaths = new Set();
+
+  for (let attempt = 0; attempt < MAX_WALLPAPER_LOAD_ATTEMPTS; attempt += 1) {
+    const candidate = await reserveWallpaperCandidate(attemptedPaths);
+    if (!candidate) {
+      break;
+    }
+
+    const { path, isReplay } = candidate;
+    attemptedPaths.add(path);
     let fileUrl = null;
 
     try {
@@ -239,9 +253,11 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
         if (error?.name === 'NotAllowedError') {
           error.code = 'WALLPAPER_PERMISSION_REQUIRED';
         }
+        await releaseWallpaperCandidate(path, isReplay, error);
         throw error;
       }
 
+      await releaseWallpaperCandidate(path, isReplay, error);
       failedItems.push({ path, error });
       if (fileUrl?.startsWith('blob:')) {
         URL.revokeObjectURL(fileUrl);
@@ -269,6 +285,120 @@ async function loadRandomWallpaper({ skipFailureScan = false } = {}) {
   const error = new Error('No readable wallpaper found');
   error.code = 'WALLPAPER_NO_VALID_FILES';
   throw error;
+}
+
+async function prepareWallpaperCycle(files) {
+  const result = await chrome.storage.local.get([
+    WALLPAPER_UNPLAYED_QUEUE_KEY,
+    WALLPAPER_PLAYED_PATHS_KEY
+  ]);
+  const validPaths = new Set(files);
+  const storedUnplayedPaths = Array.isArray(result[WALLPAPER_UNPLAYED_QUEUE_KEY])
+    ? result[WALLPAPER_UNPLAYED_QUEUE_KEY]
+    : [];
+  const storedPlayedPaths = Array.isArray(result[WALLPAPER_PLAYED_PATHS_KEY])
+    ? result[WALLPAPER_PLAYED_PATHS_KEY]
+    : [];
+  const playedSet = new Set(storedPlayedPaths.filter(path => validPaths.has(path)));
+  const knownPaths = new Set([...storedUnplayedPaths, ...storedPlayedPaths]);
+
+  let playedPaths = [...playedSet];
+  let unplayedPaths = uniquePaths(
+    storedUnplayedPaths.filter(path => validPaths.has(path) && !playedSet.has(path))
+  );
+
+  const newPaths = files.filter(path => !knownPaths.has(path));
+  if (newPaths.length) {
+    unplayedPaths.push(...shuffle(newPaths));
+  }
+
+  if (!unplayedPaths.length && files.length) {
+    unplayedPaths = shuffle(files);
+    playedPaths = [];
+  }
+
+  await chrome.storage.local.set({
+    [WALLPAPER_UNPLAYED_QUEUE_KEY]: unplayedPaths,
+    [WALLPAPER_PLAYED_PATHS_KEY]: playedPaths
+  });
+}
+
+async function reserveWallpaperCandidate(attemptedPaths) {
+  const result = await chrome.storage.local.get([
+    WALLPAPER_UNPLAYED_QUEUE_KEY,
+    WALLPAPER_PLAYED_PATHS_KEY
+  ]);
+  const unplayedPaths = Array.isArray(result[WALLPAPER_UNPLAYED_QUEUE_KEY])
+    ? result[WALLPAPER_UNPLAYED_QUEUE_KEY]
+    : [];
+  const playedPaths = Array.isArray(result[WALLPAPER_PLAYED_PATHS_KEY])
+    ? result[WALLPAPER_PLAYED_PATHS_KEY]
+    : [];
+  const replayCandidates = playedPaths.filter(path => (
+    path !== currentPath && !attemptedPaths.has(path)
+  ));
+
+  if (replayCandidates.length && Math.random() < WALLPAPER_REVISIT_PROBABILITY) {
+    return {
+      path: randomItem(replayCandidates),
+      isReplay: true
+    };
+  }
+
+  const nextPath = unplayedPaths.find(path => !attemptedPaths.has(path));
+  if (!nextPath) {
+    return null;
+  }
+
+  const nextUnplayedPaths = unplayedPaths.filter(path => path !== nextPath);
+  const nextPlayedPaths = playedPaths.includes(nextPath)
+    ? playedPaths
+    : [...playedPaths, nextPath];
+
+  await chrome.storage.local.set({
+    [WALLPAPER_UNPLAYED_QUEUE_KEY]: nextUnplayedPaths,
+    [WALLPAPER_PLAYED_PATHS_KEY]: nextPlayedPaths
+  });
+
+  return {
+    path: nextPath,
+    isReplay: false
+  };
+}
+
+async function releaseWallpaperCandidate(path, isReplay, error) {
+  if (isReplay) {
+    return;
+  }
+
+  const result = await chrome.storage.local.get([
+    WALLPAPER_UNPLAYED_QUEUE_KEY,
+    WALLPAPER_PLAYED_PATHS_KEY
+  ]);
+  const unplayedPaths = Array.isArray(result[WALLPAPER_UNPLAYED_QUEUE_KEY])
+    ? result[WALLPAPER_UNPLAYED_QUEUE_KEY]
+    : [];
+  const playedPaths = Array.isArray(result[WALLPAPER_PLAYED_PATHS_KEY])
+    ? result[WALLPAPER_PLAYED_PATHS_KEY]
+    : [];
+  const nextPlayedPaths = playedPaths.filter(item => item !== path);
+
+  if (!isUnavailableWallpaperError(error) && !unplayedPaths.includes(path)) {
+    unplayedPaths.push(path);
+  }
+
+  await chrome.storage.local.set({
+    [WALLPAPER_UNPLAYED_QUEUE_KEY]: unplayedPaths,
+    [WALLPAPER_PLAYED_PATHS_KEY]: nextPlayedPaths
+  });
+}
+
+function uniquePaths(paths) {
+  return [...new Set(paths)];
+}
+
+function randomItem(items) {
+  return items[Math.floor(Math.random() * items.length)];
 }
 
 function countDirectoryChangeFailures(failedItems) {
@@ -346,11 +476,26 @@ async function removeUnavailableWallpaperPaths(failedItems) {
   }
 
   const unavailableSet = new Set(unavailablePaths);
-  const { files = [] } = await chrome.storage.local.get('files');
+  const result = await chrome.storage.local.get([
+    'files',
+    WALLPAPER_UNPLAYED_QUEUE_KEY,
+    WALLPAPER_PLAYED_PATHS_KEY
+  ]);
+  const files = result.files || [];
   const validFiles = files.filter(path => !unavailableSet.has(path));
+  const unplayedPaths = Array.isArray(result[WALLPAPER_UNPLAYED_QUEUE_KEY])
+    ? result[WALLPAPER_UNPLAYED_QUEUE_KEY].filter(path => !unavailableSet.has(path))
+    : [];
+  const playedPaths = Array.isArray(result[WALLPAPER_PLAYED_PATHS_KEY])
+    ? result[WALLPAPER_PLAYED_PATHS_KEY].filter(path => !unavailableSet.has(path))
+    : [];
 
   if (validFiles.length !== files.length) {
-    await chrome.storage.local.set({ files: validFiles });
+    await chrome.storage.local.set({
+      files: validFiles,
+      [WALLPAPER_UNPLAYED_QUEUE_KEY]: unplayedPaths,
+      [WALLPAPER_PLAYED_PATHS_KEY]: playedPaths
+    });
   }
 }
 
