@@ -1,6 +1,6 @@
 ﻿# enhanced-single-newtab 项目专属规则
 
-通用规则见：`E:\@imFile-Download\AI-Useful-Prompt\通用开发工作规则.md`。
+本项目继承 Codex 已加载的全局 `AGENTS.md`（本机：`C:\Users\freez\.codex\AGENTS.md`）；以下保留项目专属规则。
 
 - 本项目是 Chrome Manifest V3 浏览器扩展，入口和权限以根目录 `manifest.json` 为准。
 - 主要代码包括 `background.js`、`newtab` 和 `icons`；核心目标是增强新标签页并限制重复新标签页。
